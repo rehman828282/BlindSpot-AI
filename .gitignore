@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.log
+.venv/
+venv/
+.env
+.env.*
+blindspot_store.sqlite3
+uploads/
+.pytest_cache/
+.DS_Store
