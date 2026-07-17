@@ -494,6 +494,29 @@ def _profile_prompt(name: str, profile: dict[str, Any], classification: dict[str
 
 
 def _shorten(text: Any, *, words: int = 26) -> str:
+    if isinstance(text, dict):
+        for key in (
+            "text",
+            "summary",
+            "title",
+            "value",
+            "description",
+            "recommendation",
+            "recommended_fix",
+            "missing_piece",
+        ):
+            if text.get(key):
+                text = text[key]
+                break
+        else:
+            text = "; ".join(
+                f"{key}: {value}"
+                for key, value in text.items()
+                if value not in (None, "", [], {})
+            )
+    elif isinstance(text, list):
+        text = "; ".join(str(item) for item in text if item not in (None, "", [], {}))
+
     clean = " ".join(str(text or "").replace("\n", " ").split())
     parts = clean.split()
     if len(parts) <= words:
@@ -504,6 +527,12 @@ def _shorten(text: Any, *, words: int = 26) -> str:
 def _as_list(value: Any, *, limit: int = 3) -> list[str]:
     if isinstance(value, list):
         items = value
+    elif isinstance(value, dict):
+        items = [
+            item
+            for item in value.values()
+            if item not in (None, "", [], {})
+        ]
     elif value:
         items = [value]
     else:
@@ -512,6 +541,11 @@ def _as_list(value: Any, *, limit: int = 3) -> list[str]:
 
 
 def _coerce_score(value: Any, *, default: int = 8) -> int:
+    if isinstance(value, dict):
+        for key in ("score", "value", "criticality", "rating"):
+            if key in value:
+                value = value[key]
+                break
     try:
         score = int(float(str(value).split("/")[0]))
     except Exception:
@@ -541,13 +575,34 @@ def _normalize_agent_payload(name: str, payload: dict[str, Any] | str) -> dict[s
     if not isinstance(payload, dict):
         payload = {"missing_piece": _shorten(payload, words=12)}
 
-    finding = _shorten(payload.get("missing_piece") or payload.get("finding"), words=12)
+    finding = _shorten(
+        payload.get("missing_piece")
+        or payload.get("finding")
+        or payload.get("Critical Missing Piece")
+        or payload.get("critical_missing_piece"),
+        words=12,
+    )
     if not finding:
         finding = "Missing decision-ready proof"
 
-    evidence = _as_list(payload.get("evidence"), limit=3)
-    why = _shorten(payload.get("why_it_matters"), words=24)
-    fix = _shorten(payload.get("fix"), words=26)
+    evidence = _as_list(
+        payload.get("evidence")
+        or payload.get("evidence_from_document")
+        or payload.get("facts_from_document"),
+        limit=3,
+    )
+    why = _shorten(
+        payload.get("why_it_matters")
+        or payload.get("why")
+        or payload.get("why_this_matters"),
+        words=24,
+    )
+    fix = _shorten(
+        payload.get("fix")
+        or payload.get("recommended_fix")
+        or payload.get("recommendation"),
+        words=26,
+    )
 
     if not evidence:
         evidence = ["The document does not provide enough specific support for this claim."]
@@ -573,6 +628,11 @@ def _normalize_agent_payload(name: str, payload: dict[str, Any] | str) -> dict[s
 
 
 def _coerce_percent(value: Any, *, default: int = 84) -> int:
+    if isinstance(value, dict):
+        for key in ("score", "value", "confidence", "percentage"):
+            if key in value:
+                value = value[key]
+                break
     try:
         percent = int(float(str(value).replace("%", "").split("/")[0]))
     except Exception:
@@ -612,6 +672,15 @@ def _normalize_consensus(
                 "score": result.get("score"),
             }
             for result in sorted(agent_results, key=lambda item: int(item.get("score", 0)), reverse=True)[:3]
+        ]
+    else:
+        supporting_agents = [
+            {
+                "agent": _shorten(agent.get("agent") if isinstance(agent, dict) else agent, words=5),
+                "finding": _shorten(agent.get("finding") if isinstance(agent, dict) else "", words=10),
+                "score": _coerce_score(agent.get("score") if isinstance(agent, dict) else None),
+            }
+            for agent in supporting_agents[:3]
         ]
 
     return {

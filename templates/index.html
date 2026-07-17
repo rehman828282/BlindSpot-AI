@@ -369,9 +369,57 @@
       function appendText(parent, tag, text, className) {
         const node = document.createElement(tag);
         if (className) node.className = className;
-        node.textContent = text || "";
+        node.textContent = formatValue(text);
         parent.appendChild(node);
         return node;
+      }
+
+      function formatValue(value) {
+        if (value === null || value === undefined) return "";
+        if (Array.isArray(value)) return value.map(formatValue).filter(Boolean).join("; ");
+        if (typeof value === "object") {
+          const preferred = [
+            "text",
+            "summary",
+            "title",
+            "value",
+            "description",
+            "recommendation",
+            "recommended_fix",
+            "missing_piece",
+            "finding",
+          ];
+          for (const key of preferred) {
+            if (value[key]) return formatValue(value[key]);
+          }
+          return Object.entries(value)
+            .filter(([, entryValue]) => entryValue !== null && entryValue !== undefined && entryValue !== "")
+            .map(([key, entryValue]) => `${key}: ${formatValue(entryValue)}`)
+            .join("; ");
+        }
+        return String(value);
+      }
+
+      function firstValue(...values) {
+        for (const value of values) {
+          const formatted = formatValue(value);
+          if (formatted) return formatted;
+        }
+        return "";
+      }
+
+      function normalizeScore(value) {
+        if (value && typeof value === "object") value = value.score || value.value || value.rating || value.criticality;
+        const parsed = Number.parseInt(String(value || "").replace("%", "").split("/")[0], 10);
+        return Number.isFinite(parsed) ? parsed : "?";
+      }
+
+      function normalizePercent(value) {
+        if (value && typeof value === "object") value = value.score || value.value || value.confidence || value.percentage;
+        let parsed = Number.parseInt(String(value || "").replace("%", "").split("/")[0], 10);
+        if (!Number.isFinite(parsed)) return "?";
+        if (parsed <= 10) parsed *= 10;
+        return Math.max(1, Math.min(99, parsed));
       }
 
       function appendFacts(parent, facts) {
@@ -384,18 +432,26 @@
       function renderAgentCard(data) {
         const card = document.createElement("section");
         card.className = "agent-card";
-        appendText(card, "h3", `${data.agent}: ${data.finding || "Finding received"}`);
-        appendText(card, "p", data.why ? `Why it matters: ${data.why}` : "");
+        const finding = firstValue(
+          data.finding,
+          data.missing_piece,
+          data["Critical Missing Piece"],
+          data.content,
+          "Finding received"
+        );
+        appendText(card, "h3", `${formatValue(data.agent || "Agent")}: ${finding}`);
+        appendText(card, "p", firstValue(data.why, data.why_it_matters) ? `Why it matters: ${firstValue(data.why, data.why_it_matters)}` : "");
         if (data.evidence && data.evidence.length) {
           appendText(card, "p", "Facts used:");
           appendFacts(card, data.evidence);
         }
-        appendText(card, "p", data.fix ? `Suggested fix: ${data.fix}` : "");
+        const fix = firstValue(data.fix, data.recommended_fix, data.recommendation);
+        appendText(card, "p", fix ? `Suggested fix: ${fix}` : "");
 
         const meta = document.createElement("div");
         meta.className = "agent-meta";
-        appendText(meta, "span", `Score ${data.score || "?"}/10`, "score-pill");
-        appendText(meta, "span", `Confidence ${data.confidence || "Medium"}`, "score-pill");
+        appendText(meta, "span", `Score ${normalizeScore(data.score)}/10`, "score-pill");
+        appendText(meta, "span", `Confidence ${formatValue(data.confidence || "Medium")}`, "score-pill");
         card.appendChild(meta);
 
         terminal.appendChild(card);
@@ -404,7 +460,7 @@
 
       function renderConsensusCard(data, target) {
         target.innerHTML = "";
-        appendText(target, "h3", data["Critical Missing Piece"] || "Critical Missing Piece");
+        appendText(target, "h3", firstValue(data["Critical Missing Piece"], data.critical_missing_piece, "Critical Missing Piece"));
         if (data.document_type || data.evaluation_framework) {
           appendText(
             target,
@@ -413,21 +469,21 @@
           );
         }
         appendText(target, "p", data.one_sentence_summary || "");
-        appendText(target, "p", data.why_this_matters ? `Why this matters: ${data.why_this_matters}` : "");
+        appendText(target, "p", data.why_this_matters ? `Why this matters: ${formatValue(data.why_this_matters)}` : "");
         const facts = data.evidence_from_document || data.facts_from_document || [];
         if (facts.length) {
           appendText(target, "p", "Facts found in your document:");
           appendFacts(target, facts);
         }
-        appendText(target, "p", data.consequence ? `Consequence: ${data.consequence}` : "");
-        appendText(target, "p", data.recommended_fix ? `Best fix: ${data.recommended_fix}` : "");
+        appendText(target, "p", data.consequence ? `Consequence: ${formatValue(data.consequence)}` : "");
+        appendText(target, "p", data.recommended_fix ? `Best fix: ${formatValue(data.recommended_fix)}` : "");
 
         const meta = document.createElement("div");
         meta.className = "agent-meta";
-        appendText(meta, "span", `Confidence ${data.confidence_score || "?"}%`, "score-pill");
+        appendText(meta, "span", `Confidence ${normalizePercent(data.confidence_score)}%`, "score-pill");
         appendText(meta, "span", `${data.confidence || "Medium"} certainty`, "score-pill");
         (data.supporting_agents || []).slice(0, 3).forEach((agent) => {
-          appendText(meta, "span", `${agent.agent || "Agent"} ${agent.score || "?"}/10`, "score-pill");
+          appendText(meta, "span", `${formatValue(agent.agent || "Agent")} ${normalizeScore(agent.score)}/10`, "score-pill");
         });
         target.appendChild(meta);
       }
