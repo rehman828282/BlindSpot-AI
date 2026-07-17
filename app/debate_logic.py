@@ -72,6 +72,32 @@ def _active_model() -> str:
 
 MODEL = _active_model()
 
+
+def classify_document(context: str) -> dict[str, Any]:
+    normalized = context.lower()
+    scores: dict[str, int] = {}
+    for track, config in TRACKS.items():
+        if track == "general":
+            continue
+        scores[track] = sum(normalized.count(keyword) for keyword in config["keywords"])
+
+    selected = max(scores, key=scores.get, default="general")
+    if scores.get(selected, 0) < 2:
+        selected = "general"
+
+    config = TRACKS[selected]
+    return {
+        "track": selected,
+        "label": config["label"],
+        "framework": config["framework"],
+        "confidence": "High" if scores.get(selected, 0) >= 5 else "Medium",
+        "scores": scores,
+    }
+
+
+def _agent_profiles_for(track: str) -> dict[str, dict[str, Any]]:
+    return TRACKS.get(track, TRACKS["general"])["agents"]
+
 AGENTS: dict[str, dict[str, Any]] = {
     "Skeptic": {
         "mission": "Stress-test the document's core claims and expose the one assumption that would collapse the argument if challenged.",
@@ -202,11 +228,193 @@ CONSENSUS_KEYS = [
     "Critical Missing Piece",
     "one_sentence_summary",
     "why_this_matters",
+    "evidence_from_document",
     "facts_from_document",
+    "consequence",
+    "confidence_score",
     "recommended_fix",
     "supporting_agents",
     "confidence",
 ]
+
+PITCH_DECK_AGENTS: dict[str, dict[str, Any]] = {
+    "Skeptic Agent": {
+        "mission": "Interrogate market sizing, financial projections, and core business assumptions for unbacked leaps.",
+        "lens": "Think like a hostile venture partner searching for the first number or claim that breaks the story.",
+        "red_flags": ["unbacked TAM or SAM", "unrealistic growth curve", "unclear pricing logic", "no margin assumptions", "missing why now"],
+        "scoring_dimensions": {
+            "assumption_fragility": "How easily the pitch fails if this assumption is challenged.",
+            "investor_challenge_likelihood": "How likely investors are to challenge this gap.",
+            "fundraising_damage": "How much the gap hurts fundability.",
+        },
+    },
+    "Evidence Agent": {
+        "mission": "Find the missing customer, traction, pilot, usage, revenue, testimonial, or LOI evidence.",
+        "lens": "Think like a traction auditor. Features do not prove demand; external validation does.",
+        "red_flags": ["no customer interviews", "no LOIs", "no usage metrics", "no pilot results", "no revenue or retention evidence"],
+        "scoring_dimensions": {
+            "proof_gap": "How much external validation is missing.",
+            "credibility_gain": "How much investor trust would improve if fixed.",
+            "screening_value": "How much the fix helps pass first review.",
+        },
+    },
+    "Risk Agent": {
+        "mission": "Find the missing execution risk, regulatory hurdle, dependency, or barrier-to-entry discussion.",
+        "lens": "Think like an investor who wants to know what can kill execution after funding.",
+        "red_flags": ["regulatory risk omitted", "supplier dependency", "unclear go-to-market cost", "weak moat", "complex implementation risk"],
+        "scoring_dimensions": {
+            "severity": "How badly this risk can damage the startup.",
+            "probability": "How likely the risk is in realistic execution.",
+            "detectability": "How visible the risk is to investors.",
+        },
+    },
+    "Investor Agent": {
+        "mission": "Judge whether the market, team, traction, and story give a venture investor a reason to keep reading.",
+        "lens": "Think like a VC screening fast: fund-return potential, team fit, urgency, and proof of demand.",
+        "red_flags": ["team-market fit unclear", "market not venture-scale", "no clear buyer", "weak fundraising narrative", "missing use of funds"],
+        "scoring_dimensions": {
+            "reader_blocker": "How much the gap blocks investor conviction.",
+            "fund_return_relevance": "How much the gap affects venture-scale potential.",
+            "team_confidence": "How much the gap affects belief in execution ability.",
+        },
+    },
+    "Competitor Agent": {
+        "mission": "Identify missing direct, indirect, or hidden competitors and the absent moat explanation.",
+        "lens": "Think like a rival founder or investor comparing alternatives and substitutes.",
+        "red_flags": ["competitor matrix too narrow", "no indirect alternatives", "weak moat", "no defensibility", "unclear differentiation"],
+        "scoring_dimensions": {
+            "differentiation_loss": "How much uniqueness is weakened.",
+            "substitution_risk": "How easily customers can choose an alternative.",
+            "moat_strength_gap": "How much defensibility is missing.",
+        },
+    },
+    "Framework Standards Agent": {
+        "mission": "Audit pitch structure against elite deck expectations and identify the missing slide or section.",
+        "lens": "Think like a YC or Sequoia-style deck reviewer: problem, solution, market, traction, GTM, team, ask, why now.",
+        "red_flags": ["missing traction slide", "missing GTM", "missing why now", "missing ask/use of funds", "weak problem framing"],
+        "scoring_dimensions": {
+            "deck_completeness": "How important the missing deck element is.",
+            "review_readiness": "How much the fix improves investor review readiness.",
+            "sequence_damage": "How much the gap breaks the pitch flow.",
+        },
+    },
+}
+
+RESUME_AGENTS: dict[str, dict[str, Any]] = {
+    "Skeptic Agent": {
+        "mission": "Scrutinize employment gaps, title jumps, vague claims, and unsupported career narratives.",
+        "lens": "Think like a skeptical hiring manager validating whether the resume story is believable.",
+        "red_flags": ["unexplained gap", "unbacked title change", "vague summary", "unclear role scope", "inflated claim"],
+        "scoring_dimensions": {
+            "assumption_fragility": "How easily a recruiter could doubt the claim.",
+            "career_story_centrality": "How central the gap is to the candidate story.",
+            "challenge_likelihood": "How likely a reviewer is to notice it.",
+        },
+    },
+    "Evidence Agent": {
+        "mission": "Find resume bullets that lack quantified impact, business outcomes, metrics, or proof.",
+        "lens": "Think like a recruiter converting claims into evidence: percentages, revenue, time saved, users, scale, accuracy, performance.",
+        "red_flags": ["job-description bullet", "no numbers", "no outcome", "no scale", "no proof of impact"],
+        "scoring_dimensions": {
+            "proof_gap": "How much measurable evidence is missing.",
+            "credibility_gain": "How much stronger the resume becomes with metrics.",
+            "shortlist_value": "How much the fix helps the candidate get shortlisted.",
+        },
+    },
+    "Risk Agent": {
+        "mission": "Detect hiring risks such as over-specialization, outdated skills, weak progression, or unclear role fit.",
+        "lens": "Think like a hiring panel looking for reasons the candidate may not succeed in the target role.",
+        "red_flags": ["skills mismatch", "outdated stack", "unclear progression", "too many unrelated projects", "no depth signal"],
+        "scoring_dimensions": {
+            "severity": "How much this risk hurts hiring confidence.",
+            "probability": "How likely reviewers are to infer the risk.",
+            "detectability": "How obvious the risk is during screening.",
+        },
+    },
+    "Recruiter Agent": {
+        "mission": "Simulate a six-second elite technical recruiter scan and find the missing role-fit signal.",
+        "lens": "Think like a recruiter matching title, keywords, outcomes, seniority, and role relevance at speed.",
+        "red_flags": ["target role unclear", "missing keywords", "summary not role-specific", "weak top third", "unclear seniority"],
+        "scoring_dimensions": {
+            "reader_blocker": "How much the gap blocks fast recruiter understanding.",
+            "keyword_match": "How much the gap affects ATS and recruiter matching.",
+            "role_fit_clarity": "How clearly the candidate fits the desired role.",
+        },
+    },
+    "Applicant Competitor Agent": {
+        "mission": "Compare the resume against top-tier applicants and find the missing differentiator.",
+        "lens": "Think like a hiring manager comparing this resume in a stack of strong applicants.",
+        "red_flags": ["generic profile", "no unique value", "projects lack outcomes", "no standout achievement", "weak positioning"],
+        "scoring_dimensions": {
+            "differentiation_loss": "How much the resume blends into the pile.",
+            "substitution_risk": "How easy it is to pick a similar applicant.",
+            "market_relevance": "How relevant the differentiator is to hiring demand.",
+        },
+    },
+    "ATS Standards Agent": {
+        "mission": "Validate ATS readability, section structure, action verbs, keyword clarity, and parse-friendly formatting.",
+        "lens": "Think like an ATS and resume standards reviewer, not a compliance auditor.",
+        "red_flags": ["missing standard sections", "weak action verbs", "unclear dates", "keyword gaps", "formatting may parse poorly"],
+        "scoring_dimensions": {
+            "ats_parse_risk": "How much the gap hurts machine parsing.",
+            "standards_gap": "How far the resume is from modern resume structure.",
+            "review_readiness": "How much the fix improves recruiter review.",
+        },
+    },
+}
+
+TRACKS = {
+    "startup_pitch_deck": {
+        "label": "Startup Pitch Deck",
+        "framework": "Investor Pitch Review",
+        "agents": PITCH_DECK_AGENTS,
+        "keywords": [
+            "tam",
+            "sam",
+            "som",
+            "traction",
+            "market",
+            "investor",
+            "funding",
+            "revenue",
+            "pitch",
+            "deck",
+            "go-to-market",
+            "gtm",
+            "competitor",
+            "moat",
+            "valuation",
+            "seed",
+            "series",
+        ],
+    },
+    "resume": {
+        "label": "Resume / CV",
+        "framework": "Recruiter and ATS Review",
+        "agents": RESUME_AGENTS,
+        "keywords": [
+            "resume",
+            "cv",
+            "experience",
+            "education",
+            "skills",
+            "projects",
+            "certifications",
+            "developer",
+            "engineer",
+            "intern",
+            "employment",
+            "linkedin",
+            "github",
+        ],
+    },
+    "general": {
+        "label": "General Document",
+        "framework": "Critical Missing Piece Review",
+        "agents": AGENTS,
+        "keywords": [],
+    },
+}
 
 
 def _has_api_key() -> bool:
@@ -267,13 +475,15 @@ async def _call_llm(system_prompt: str, user_prompt: str, *, expect_json: bool =
     return completion.choices[0].message.content or ""
 
 
-def _profile_prompt(name: str, profile: dict[str, Any]) -> str:
+def _profile_prompt(name: str, profile: dict[str, Any], classification: dict[str, Any]) -> str:
     red_flags = "\n".join(f"- {flag}" for flag in profile["red_flags"])
     scoring = "\n".join(
         f"- {dimension}: {description}"
         for dimension, description in profile["scoring_dimensions"].items()
     )
     return (
+        f"Detected document type: {classification['label']}\n"
+        f"Evaluation framework: {classification['framework']}\n\n"
         f"Agent: {name}\n"
         f"Mission: {profile['mission']}\n\n"
         f"Review lens: {profile['lens']}\n\n"
@@ -362,7 +572,21 @@ def _normalize_agent_payload(name: str, payload: dict[str, Any] | str) -> dict[s
     return normalized
 
 
-def _normalize_consensus(payload: dict[str, Any], agent_results: list[dict[str, Any]]) -> dict[str, Any]:
+def _coerce_percent(value: Any, *, default: int = 84) -> int:
+    try:
+        percent = int(float(str(value).replace("%", "").split("/")[0]))
+    except Exception:
+        percent = default
+    if percent <= 10:
+        percent *= 10
+    return max(1, min(99, percent))
+
+
+def _normalize_consensus(
+    payload: dict[str, Any],
+    agent_results: list[dict[str, Any]],
+    classification: dict[str, Any],
+) -> dict[str, Any]:
     missing_piece = _shorten(
         payload.get("Critical Missing Piece") or payload.get("critical_missing_piece"),
         words=14,
@@ -371,7 +595,7 @@ def _normalize_consensus(payload: dict[str, Any], agent_results: list[dict[str, 
         top_agent = max(agent_results, key=lambda result: int(result.get("score", 0)), default={})
         missing_piece = top_agent.get("finding") or "Clear proof of the strongest claim"
 
-    facts = _as_list(payload.get("facts_from_document"), limit=3)
+    facts = _as_list(payload.get("evidence_from_document") or payload.get("facts_from_document"), limit=3)
     if not facts:
         for result in agent_results:
             facts.extend(_as_list(result.get("evidence"), limit=2))
@@ -391,6 +615,8 @@ def _normalize_consensus(payload: dict[str, Any], agent_results: list[dict[str, 
         ]
 
     return {
+        "document_type": classification["label"],
+        "evaluation_framework": classification["framework"],
         "Critical Missing Piece": missing_piece,
         "one_sentence_summary": _shorten(
             payload.get("one_sentence_summary"),
@@ -403,6 +629,13 @@ def _normalize_consensus(payload: dict[str, Any], agent_results: list[dict[str, 
         )
         or "This is the gap most likely to stop a reader from trusting or acting on the document.",
         "facts_from_document": facts,
+        "evidence_from_document": facts,
+        "consequence": _shorten(
+            payload.get("consequence"),
+            words=30,
+        )
+        or "The reader may reject or ignore the document because the central proof is not clear enough.",
+        "confidence_score": _coerce_percent(payload.get("confidence_score")),
         "recommended_fix": _shorten(
             payload.get("recommended_fix"),
             words=38,
@@ -414,7 +647,12 @@ def _normalize_consensus(payload: dict[str, Any], agent_results: list[dict[str, 
     }
 
 
-async def _run_agent(name: str, profile: dict[str, Any], context: str) -> dict[str, Any]:
+async def _run_agent(
+    name: str,
+    profile: dict[str, Any],
+    context: str,
+    classification: dict[str, Any],
+) -> dict[str, Any]:
     if not _has_api_key():
         return _fallback_agent(name, profile, context)
 
@@ -424,11 +662,13 @@ async def _run_agent(name: str, profile: dict[str, Any], context: str) -> dict[s
         "Your job is not to summarize the document. Your job is to discover the most consequential missing piece. "
         "Be precise, evidence-grounded, adversarially useful, and brutally practical. "
         "Only use facts visible in the document context. Do not invent risks, requirements, compliance duties, or reader goals. "
-        "First infer the document type, then recommend a missing piece that is natural for that type. "
-        "For a CV or resume, focus on hiring usefulness: proof, positioning, outcomes, relevance, clarity, and credibility."
+        f"The document has already been classified as {classification['label']}; use the {classification['framework']} framework. "
+        "Recommend a missing piece that is natural for this document type. "
+        "For resumes/CVs, focus on hiring usefulness: proof, positioning, outcomes, relevance, clarity, ATS, and credibility. "
+        "For startup pitch decks, focus on investor usefulness: market, traction, moat, team, GTM, ask, and proof of demand."
     )
     user_prompt = (
-        f"{_profile_prompt(name, profile)}\n\n"
+        f"{_profile_prompt(name, profile, classification)}\n\n"
         f"Document context:\n{context}\n\n"
         "Now perform your review. Identify only one strongest candidate missing piece from your perspective. "
         "Keep the answer concise and useful for a normal person reading the document."
@@ -462,12 +702,19 @@ def _fallback_agent(name: str, profile: dict[str, Any], context: str) -> dict[st
     )
 
 
-async def _rank_criticality(context: str, agent_results: list[dict[str, str]]) -> dict[str, Any]:
+async def _rank_criticality(
+    context: str,
+    agent_results: list[dict[str, Any]],
+    classification: dict[str, Any],
+) -> dict[str, Any]:
     fallback = {
         "Critical Missing Piece": "A concrete, evidence-backed section that answers the reader's highest-impact unresolved decision.",
         "one_sentence_summary": "The document needs one specific proof-backed section that makes its strongest claim easy to trust.",
         "why_this_matters": "Without that proof, the reader may understand the document but still not believe or act on it.",
+        "evidence_from_document": [],
         "facts_from_document": [],
+        "consequence": "The reader may reject or ignore the document because the central proof is not clear enough.",
+        "confidence_score": 84,
         "recommended_fix": "Add a dedicated section with evidence, risks, reader impact, competitive context, and standards alignment.",
         "supporting_agents": [],
         "confidence": "Medium",
@@ -475,12 +722,13 @@ async def _rank_criticality(context: str, agent_results: list[dict[str, str]]) -
     }
 
     if not _has_api_key():
-        return _normalize_consensus(fallback, agent_results)
+        return _normalize_consensus(fallback, agent_results, classification)
 
     system_prompt = (
         "You are BlindSpot AI's Criticality Ranking Engine, a final judge that resolves disagreements between six "
         "expert diagnostic agents. Your decision must identify the single missing piece with the greatest combined "
         "impact on truth, risk, reader action, competitive strength, and professional review readiness. "
+        f"The document type is {classification['label']} and the active framework is {classification['framework']}. "
         "Rank severity over novelty. Prefer the gap that, if fixed, most improves the document's chance of succeeding. "
         "Stay grounded in facts visible in the document context. Do not select a generic best-practice gap unless the "
         "document facts make it directly useful. Output one strict JSON object."
@@ -489,7 +737,9 @@ async def _rank_criticality(context: str, agent_results: list[dict[str, str]]) -
         f"Document context:\n{context}\n\n"
         f"Agent findings:\n{json.dumps(agent_results, ensure_ascii=True, indent=2)}\n\n"
         f"Use exactly these JSON keys: {', '.join(CONSENSUS_KEYS)}. "
-        "facts_from_document must contain 2-3 short facts from the uploaded document. "
+        "evidence_from_document and facts_from_document must contain the same 2-3 short facts from the uploaded document. "
+        "consequence must be one short sentence explaining the immediate downside if the gap is not fixed. "
+        "confidence_score must be an integer percentage from 1 to 99 based on cross-agent agreement. "
         "supporting_agents must contain the 2-3 most relevant agents with their scores. "
         "recommended_fix must be practical and short enough to show directly in the UI. "
         "Return only valid JSON."
@@ -498,23 +748,32 @@ async def _rank_criticality(context: str, agent_results: list[dict[str, str]]) -
     try:
         raw = await _call_llm(system_prompt, user_prompt, expect_json=True)
         parsed = _extract_json_object(raw) or fallback
-        return _normalize_consensus(parsed, agent_results)
+        return _normalize_consensus(parsed, agent_results, classification)
     except Exception as exc:
         fallback["why_this_matters"] += f" Ranking engine fallback was used because the LLM call failed: {exc}"
-        return _normalize_consensus(fallback, agent_results)
+        return _normalize_consensus(fallback, agent_results, classification)
 
 
 async def stream_debate(context: str):
+    classification = classify_document(context)
+    agent_profiles = _agent_profiles_for(classification["track"])
     yield {
         "event": "status",
-        "data": {"message": "Debate initialized.", "provider": _active_provider(), "model": MODEL},
+        "data": {
+            "message": "Debate initialized.",
+            "provider": _active_provider(),
+            "model": MODEL,
+            "document_type": classification["label"],
+            "framework": classification["framework"],
+            "classification_confidence": classification["confidence"],
+        },
     }
 
     pending: set[asyncio.Task[dict[str, Any]]] = {
-        asyncio.create_task(_run_agent(name, profile, context))
-        for name, profile in AGENTS.items()
+        asyncio.create_task(_run_agent(name, profile, context, classification))
+        for name, profile in agent_profiles.items()
     }
-    results: list[dict[str, str]] = []
+    results: list[dict[str, Any]] = []
 
     while pending:
         done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
@@ -524,7 +783,7 @@ async def stream_debate(context: str):
             yield {"event": "agent", "data": result}
 
     yield {"event": "status", "data": {"message": "Criticality Ranking Engine is resolving consensus."}}
-    ranking = await _rank_criticality(context, results)
+    ranking = await _rank_criticality(context, results, classification)
     yield {"event": "consensus", "data": ranking}
     yield {"event": "done", "data": {"message": "Debate complete."}}
 

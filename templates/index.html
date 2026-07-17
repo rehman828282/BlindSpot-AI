@@ -405,17 +405,27 @@
       function renderConsensusCard(data, target) {
         target.innerHTML = "";
         appendText(target, "h3", data["Critical Missing Piece"] || "Critical Missing Piece");
+        if (data.document_type || data.evaluation_framework) {
+          appendText(
+            target,
+            "p",
+            `${data.document_type || "Document"} - ${data.evaluation_framework || "Critical Review"}`
+          );
+        }
         appendText(target, "p", data.one_sentence_summary || "");
         appendText(target, "p", data.why_this_matters ? `Why this matters: ${data.why_this_matters}` : "");
-        if (data.facts_from_document && data.facts_from_document.length) {
+        const facts = data.evidence_from_document || data.facts_from_document || [];
+        if (facts.length) {
           appendText(target, "p", "Facts found in your document:");
-          appendFacts(target, data.facts_from_document);
+          appendFacts(target, facts);
         }
+        appendText(target, "p", data.consequence ? `Consequence: ${data.consequence}` : "");
         appendText(target, "p", data.recommended_fix ? `Best fix: ${data.recommended_fix}` : "");
 
         const meta = document.createElement("div");
         meta.className = "agent-meta";
-        appendText(meta, "span", `Confidence ${data.confidence || "Medium"}`, "score-pill");
+        appendText(meta, "span", `Confidence ${data.confidence_score || "?"}%`, "score-pill");
+        appendText(meta, "span", `${data.confidence || "Medium"} certainty`, "score-pill");
         (data.supporting_agents || []).slice(0, 3).forEach((agent) => {
           appendText(meta, "span", `${agent.agent || "Agent"} ${agent.score || "?"}/10`, "score-pill");
         });
@@ -475,7 +485,8 @@
         eventSource.addEventListener("status", (event) => {
           const data = JSON.parse(event.data);
           const modelText = data.provider && data.model ? ` (${data.provider}: ${data.model})` : "";
-          appendTerminal("status", `system: ${data.message}${modelText}`);
+          const trackText = data.document_type ? ` | ${data.document_type} - ${data.framework}` : "";
+          appendTerminal("status", `system: ${data.message}${trackText}${modelText}`);
         });
 
         eventSource.addEventListener("agent", (event) => {
