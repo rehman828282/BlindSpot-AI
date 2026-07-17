@@ -131,15 +131,31 @@ vector_store = SQLiteVectorStore()
 
 
 def extract_pdf_text(data: bytes) -> str:
+    global PdfReader
     if PdfReader is None:
-        raise HTTPException(status_code=500, detail="PDF parsing requires pypdf. Install requirements.txt.")
+        try:
+            from pypdf import PdfReader as RuntimePdfReader
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"PDF parsing requires pypdf in the server Python environment: {exc}",
+            ) from exc
+        PdfReader = RuntimePdfReader
     reader = PdfReader(io.BytesIO(data))
     return "\n\n".join(page.extract_text() or "" for page in reader.pages)
 
 
 def extract_docx_text(data: bytes) -> str:
+    global Document
     if Document is None:
-        raise HTTPException(status_code=500, detail="DOCX parsing requires python-docx. Install requirements.txt.")
+        try:
+            from docx import Document as RuntimeDocument
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"DOCX parsing requires python-docx in the server Python environment: {exc}",
+            ) from exc
+        Document = RuntimeDocument
     document = Document(io.BytesIO(data))
     parts: list[str] = [paragraph.text for paragraph in document.paragraphs if paragraph.text.strip()]
 
@@ -153,8 +169,16 @@ def extract_docx_text(data: bytes) -> str:
 
 
 def extract_pptx_text(data: bytes) -> str:
+    global Presentation
     if Presentation is None:
-        raise HTTPException(status_code=500, detail="PPTX parsing requires python-pptx. Install requirements.txt.")
+        try:
+            from pptx import Presentation as RuntimePresentation
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"PPTX parsing requires python-pptx in the server Python environment: {exc}",
+            ) from exc
+        Presentation = RuntimePresentation
     presentation = Presentation(io.BytesIO(data))
     slides: list[str] = []
 

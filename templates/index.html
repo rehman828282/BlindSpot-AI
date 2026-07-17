@@ -187,6 +187,64 @@
       .terminal-scroll {
         scrollbar-color: #60a5fa #111827;
       }
+
+      .agent-card,
+      .consensus-card {
+        border: 1px solid #1f2937;
+        border-radius: 0.5rem;
+        background: rgba(17, 24, 39, 0.86);
+        color: #e5e7eb;
+        margin-bottom: 0.75rem;
+        padding: 0.875rem;
+      }
+
+      .agent-card h3,
+      .consensus-card h3 {
+        color: #f8fafc;
+        font-size: 0.95rem;
+        margin: 0 0 0.5rem;
+      }
+
+      .agent-card p,
+      .consensus-card p {
+        color: #cbd5e1;
+        font-size: 0.875rem;
+        line-height: 1.45;
+        margin: 0.35rem 0;
+      }
+
+      .agent-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.65rem;
+      }
+
+      .score-pill {
+        border: 1px solid #164e63;
+        border-radius: 999px;
+        background: rgba(8, 145, 178, 0.16);
+        color: #a5f3fc;
+        font-size: 0.75rem;
+        padding: 0.2rem 0.55rem;
+      }
+
+      .fact-list {
+        margin: 0.4rem 0 0;
+        padding-left: 1.1rem;
+      }
+
+      .fact-list li {
+        color: #d1d5db;
+        font-size: 0.85rem;
+        line-height: 1.45;
+        margin: 0.2rem 0;
+      }
+
+      .status-line {
+        color: #93c5fd;
+        margin-bottom: 0.5rem;
+      }
     </style>
   </head>
   <body class="min-h-screen bg-zinc-950 text-zinc-100">
@@ -245,6 +303,7 @@
               <h2 class="text-base font-semibold text-cyan-100">Generate Missing Piece</h2>
               <p id="criticalIssue" class="mt-1 text-sm text-cyan-200"></p>
             </div>
+            <div id="consensusSummary" class="consensus-card"></div>
             <form id="fixForm" class="flex flex-col gap-3">
               <input
                 id="fixInstructions"
@@ -287,6 +346,7 @@
       const modelStatus = document.getElementById("modelStatus");
       const fixPanel = document.getElementById("fixPanel");
       const criticalIssue = document.getElementById("criticalIssue");
+      const consensusSummary = document.getElementById("consensusSummary");
       const fixForm = document.getElementById("fixForm");
       const fixInstructions = document.getElementById("fixInstructions");
       const fixOutput = document.getElementById("fixOutput");
@@ -300,15 +360,73 @@
 
       function appendTerminal(kind, value) {
         const row = document.createElement("div");
-        row.className = kind === "error" ? "text-red-300" : kind === "agent" ? "text-green-200" : "text-sky-200";
+        row.className = kind === "error" ? "text-red-300" : "status-line";
         row.textContent = value;
         terminal.appendChild(row);
         terminal.scrollTop = terminal.scrollHeight;
       }
 
+      function appendText(parent, tag, text, className) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        node.textContent = text || "";
+        parent.appendChild(node);
+        return node;
+      }
+
+      function appendFacts(parent, facts) {
+        const list = document.createElement("ul");
+        list.className = "fact-list";
+        (facts || []).slice(0, 3).forEach((fact) => appendText(list, "li", fact));
+        parent.appendChild(list);
+      }
+
+      function renderAgentCard(data) {
+        const card = document.createElement("section");
+        card.className = "agent-card";
+        appendText(card, "h3", `${data.agent}: ${data.finding || "Finding received"}`);
+        appendText(card, "p", data.why ? `Why it matters: ${data.why}` : "");
+        if (data.evidence && data.evidence.length) {
+          appendText(card, "p", "Facts used:");
+          appendFacts(card, data.evidence);
+        }
+        appendText(card, "p", data.fix ? `Suggested fix: ${data.fix}` : "");
+
+        const meta = document.createElement("div");
+        meta.className = "agent-meta";
+        appendText(meta, "span", `Score ${data.score || "?"}/10`, "score-pill");
+        appendText(meta, "span", `Confidence ${data.confidence || "Medium"}`, "score-pill");
+        card.appendChild(meta);
+
+        terminal.appendChild(card);
+        terminal.scrollTop = terminal.scrollHeight;
+      }
+
+      function renderConsensusCard(data, target) {
+        target.innerHTML = "";
+        appendText(target, "h3", data["Critical Missing Piece"] || "Critical Missing Piece");
+        appendText(target, "p", data.one_sentence_summary || "");
+        appendText(target, "p", data.why_this_matters ? `Why this matters: ${data.why_this_matters}` : "");
+        if (data.facts_from_document && data.facts_from_document.length) {
+          appendText(target, "p", "Facts found in your document:");
+          appendFacts(target, data.facts_from_document);
+        }
+        appendText(target, "p", data.recommended_fix ? `Best fix: ${data.recommended_fix}` : "");
+
+        const meta = document.createElement("div");
+        meta.className = "agent-meta";
+        appendText(meta, "span", `Confidence ${data.confidence || "Medium"}`, "score-pill");
+        (data.supporting_agents || []).slice(0, 3).forEach((agent) => {
+          appendText(meta, "span", `${agent.agent || "Agent"} ${agent.score || "?"}/10`, "score-pill");
+        });
+        target.appendChild(meta);
+      }
+
       function resetDebateUi() {
         terminal.innerHTML = "";
         fixPanel.classList.add("hidden");
+        consensusSummary.innerHTML = "";
+        criticalIssue.textContent = "";
         fixOutput.classList.add("hidden");
         fixOutput.textContent = "";
         finalIssue = "";
@@ -356,21 +474,27 @@
 
         eventSource.addEventListener("status", (event) => {
           const data = JSON.parse(event.data);
-          appendTerminal("status", `system: ${data.message}`);
+          const modelText = data.provider && data.model ? ` (${data.provider}: ${data.model})` : "";
+          appendTerminal("status", `system: ${data.message}${modelText}`);
         });
 
         eventSource.addEventListener("agent", (event) => {
           const data = JSON.parse(event.data);
-          appendTerminal("agent", `${data.agent}: ${data.content}`);
+          renderAgentCard(data);
         });
 
         eventSource.addEventListener("consensus", (event) => {
           const data = JSON.parse(event.data);
           finalIssue = data["Critical Missing Piece"] || "";
           criticalIssue.textContent = finalIssue;
-          appendTerminal("status", `consensus: ${JSON.stringify(data)}`);
+          const terminalConsensus = document.createElement("section");
+          terminalConsensus.className = "consensus-card";
+          renderConsensusCard(data, terminalConsensus);
+          terminal.appendChild(terminalConsensus);
+          renderConsensusCard(data, consensusSummary);
           fixPanel.classList.remove("hidden");
           setStatus("Consensus reached");
+          terminal.scrollTop = terminal.scrollHeight;
         });
 
         eventSource.addEventListener("error", (event) => {

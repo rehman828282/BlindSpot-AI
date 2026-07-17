@@ -48,7 +48,7 @@ PROVIDER_BASE_URLS = {
 
 
 def _active_provider() -> str:
-    if AI_PROVIDER in {"groq", "openrouter", "openai"}:
+    if AI_PROVIDER in {"groq", "openrouter", "openai", "local"}:
         return AI_PROVIDER
     if GROQ_API_KEY:
         return "groq"
@@ -190,15 +190,23 @@ AGENTS: dict[str, dict[str, Any]] = {
 }
 
 AGENT_OUTPUT_CONTRACT = (
-    "Return a rigorous review using exactly these headings:\n"
-    "1. Critical Missing Piece Candidate\n"
-    "2. Why This Is The Highest-Leverage Gap\n"
-    "3. Evidence From The Document\n"
-    "4. What A Strong Fix Must Include\n"
-    "5. Scores\n\n"
-    "For Scores, provide three 1-10 scores using your assigned scoring dimensions and one final criticality score. "
-    "Do not invent document facts. If evidence is absent, say what is absent and why that absence matters."
+    "Return only one compact JSON object. No markdown. No headings outside JSON. "
+    "Use these exact keys: missing_piece, why_it_matters, evidence, fix, score, confidence. "
+    "missing_piece must be 12 words or fewer. why_it_matters and fix must be one short sentence each. "
+    "evidence must be an array of 1-3 short facts found in the document, not generic assumptions. "
+    "score must be an integer from 1 to 10. confidence must be Low, Medium, or High. "
+    "If your lens suggests a gap that is irrelevant to this document type, choose a more relevant gap."
 )
+
+CONSENSUS_KEYS = [
+    "Critical Missing Piece",
+    "one_sentence_summary",
+    "why_this_matters",
+    "facts_from_document",
+    "recommended_fix",
+    "supporting_agents",
+    "confidence",
+]
 
 
 def _has_api_key() -> bool:
@@ -275,7 +283,138 @@ def _profile_prompt(name: str, profile: dict[str, Any]) -> str:
     )
 
 
-async def _run_agent(name: str, profile: dict[str, Any], context: str) -> dict[str, str]:
+def _shorten(text: Any, *, words: int = 26) -> str:
+    clean = " ".join(str(text or "").replace("\n", " ").split())
+    parts = clean.split()
+    if len(parts) <= words:
+        return clean
+    return " ".join(parts[:words]).rstrip(".,;:") + "..."
+
+
+def _as_list(value: Any, *, limit: int = 3) -> list[str]:
+    if isinstance(value, list):
+        items = value
+    elif value:
+        items = [value]
+    else:
+        items = []
+    return [_shorten(item, words=22) for item in items if str(item).strip()][:limit]
+
+
+def _coerce_score(value: Any, *, default: int = 8) -> int:
+    try:
+        score = int(float(str(value).split("/")[0]))
+    except Exception:
+        score = default
+    return max(1, min(10, score))
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        parsed = json.loads(text[start : end + 1])
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
+def _normalize_agent_payload(name: str, payload: dict[str, Any] | str) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        payload = {"missing_piece": _shorten(payload, words=12)}
+
+    finding = _shorten(payload.get("missing_piece") or payload.get("finding"), words=12)
+    if not finding:
+        finding = "Missing decision-ready proof"
+
+    evidence = _as_list(payload.get("evidence"), limit=3)
+    why = _shorten(payload.get("why_it_matters"), words=24)
+    fix = _shorten(payload.get("fix"), words=26)
+
+    if not evidence:
+        evidence = ["The document does not provide enough specific support for this claim."]
+    if not why:
+        why = "This gap makes the reader work too hard to trust the claim."
+    if not fix:
+        fix = "Add a short section with concrete evidence, measurable impact, and a direct reader benefit."
+
+    normalized = {
+        "agent": name,
+        "finding": finding,
+        "why": why,
+        "evidence": evidence,
+        "fix": fix,
+        "score": _coerce_score(payload.get("score")),
+        "confidence": str(payload.get("confidence") or "Medium").title(),
+    }
+    normalized["content"] = (
+        f"{finding} | Why: {why} | Evidence: {'; '.join(evidence)} | Fix: {fix} "
+        f"| Score: {normalized['score']}/10"
+    )
+    return normalized
+
+
+def _normalize_consensus(payload: dict[str, Any], agent_results: list[dict[str, Any]]) -> dict[str, Any]:
+    missing_piece = _shorten(
+        payload.get("Critical Missing Piece") or payload.get("critical_missing_piece"),
+        words=14,
+    )
+    if not missing_piece:
+        top_agent = max(agent_results, key=lambda result: int(result.get("score", 0)), default={})
+        missing_piece = top_agent.get("finding") or "Clear proof of the strongest claim"
+
+    facts = _as_list(payload.get("facts_from_document"), limit=3)
+    if not facts:
+        for result in agent_results:
+            facts.extend(_as_list(result.get("evidence"), limit=2))
+            if len(facts) >= 3:
+                break
+    facts = facts[:3] or ["The uploaded document lacks a concrete fact pattern for the final gap."]
+
+    supporting_agents = payload.get("supporting_agents")
+    if not isinstance(supporting_agents, list):
+        supporting_agents = [
+            {
+                "agent": result.get("agent"),
+                "finding": result.get("finding"),
+                "score": result.get("score"),
+            }
+            for result in sorted(agent_results, key=lambda item: int(item.get("score", 0)), reverse=True)[:3]
+        ]
+
+    return {
+        "Critical Missing Piece": missing_piece,
+        "one_sentence_summary": _shorten(
+            payload.get("one_sentence_summary"),
+            words=28,
+        )
+        or f"The document should explain {missing_piece.lower()} in a specific, evidence-backed way.",
+        "why_this_matters": _shorten(
+            payload.get("why_this_matters") or payload.get("why_it_is_critical"),
+            words=34,
+        )
+        or "This is the gap most likely to stop a reader from trusting or acting on the document.",
+        "facts_from_document": facts,
+        "recommended_fix": _shorten(
+            payload.get("recommended_fix"),
+            words=38,
+        )
+        or "Add a concise section that names the gap, proves it with facts from the document, and gives a specific fix.",
+        "supporting_agents": supporting_agents,
+        "confidence": str(payload.get("confidence") or "Medium").title(),
+        "agent_consensus": agent_results,
+    }
+
+
+async def _run_agent(name: str, profile: dict[str, Any], context: str) -> dict[str, Any]:
     if not _has_api_key():
         return _fallback_agent(name, profile, context)
 
@@ -283,84 +422,86 @@ async def _run_agent(name: str, profile: dict[str, Any], context: str) -> dict[s
         f"You are the {name} agent in BlindSpot AI's multi-agent debate. "
         "You are an expert-level document diagnostic agent for a world-class hackathon product. "
         "Your job is not to summarize the document. Your job is to discover the most consequential missing piece. "
-        "Be precise, evidence-grounded, adversarially useful, and brutally practical."
+        "Be precise, evidence-grounded, adversarially useful, and brutally practical. "
+        "Only use facts visible in the document context. Do not invent risks, requirements, compliance duties, or reader goals. "
+        "First infer the document type, then recommend a missing piece that is natural for that type. "
+        "For a CV or resume, focus on hiring usefulness: proof, positioning, outcomes, relevance, clarity, and credibility."
     )
     user_prompt = (
         f"{_profile_prompt(name, profile)}\n\n"
         f"Document context:\n{context}\n\n"
-        "Now perform your review. Identify only one strongest candidate missing piece from your perspective."
+        "Now perform your review. Identify only one strongest candidate missing piece from your perspective. "
+        "Keep the answer concise and useful for a normal person reading the document."
     )
     try:
-        content = await _call_llm(system_prompt, user_prompt)
+        content = await _call_llm(system_prompt, user_prompt, expect_json=True)
+        parsed = _extract_json_object(content) or {"missing_piece": content}
     except Exception as exc:
-        content = f"LLM call failed for {name}: {exc}. Local fallback: {_fallback_agent(name, profile, context)['content']}"
+        fallback = _fallback_agent(name, profile, context)
+        fallback["content"] = f"LLM call failed for {name}: {exc}. Local fallback: {fallback['content']}"
+        return fallback
 
-    return {"agent": name, "content": content.strip()}
+    return _normalize_agent_payload(name, parsed)
 
 
-def _fallback_agent(name: str, profile: dict[str, Any], context: str) -> dict[str, str]:
+def _fallback_agent(name: str, profile: dict[str, Any], context: str) -> dict[str, Any]:
     excerpt = " ".join(context.split())[:420]
     if not excerpt:
         excerpt = "No document context was available."
     first_dimension = next(iter(profile["scoring_dimensions"]))
-    content = (
-        "1. Critical Missing Piece Candidate\n"
-        f"{profile['mission']}\n\n"
-        "2. Why This Is The Highest-Leverage Gap\n"
-        "This gap likely controls whether a reader can trust the document enough to act on it. "
-        "A strong submission needs decision-grade detail, not just confident framing.\n\n"
-        "3. Evidence From The Document\n"
-        f"Available context signal: {excerpt}\n\n"
-        "4. What A Strong Fix Must Include\n"
-        "Add a focused section with concrete claims, supporting evidence, risk handling, reader impact, "
-        "competitive positioning, and measurable acceptance criteria.\n\n"
-        "5. Scores\n"
-        f"- {first_dimension}: 8/10\n"
-        "- final_criticality: 9/10"
+    return _normalize_agent_payload(
+        name,
+        {
+            "missing_piece": profile["mission"],
+            "why_it_matters": "This gap controls whether the reader can trust the document enough to act.",
+            "evidence": [f"Context signal: {excerpt}"],
+            "fix": "Add a short, specific section with proof, measurable impact, and reader-focused value.",
+            "score": 8 if first_dimension else 7,
+            "confidence": "Medium",
+        },
     )
-    return {"agent": name, "content": content}
 
 
 async def _rank_criticality(context: str, agent_results: list[dict[str, str]]) -> dict[str, Any]:
     fallback = {
         "Critical Missing Piece": "A concrete, evidence-backed section that answers the reader's highest-impact unresolved decision.",
-        "criticality_score": 9,
-        "why_it_is_critical": (
-            "Multiple expert perspectives converged on a missing decision-grade section rather than a cosmetic edit. "
-            "The gap affects trust, actionability, risk, and review readiness."
-        ),
-        "agent_consensus": agent_results,
+        "one_sentence_summary": "The document needs one specific proof-backed section that makes its strongest claim easy to trust.",
+        "why_this_matters": "Without that proof, the reader may understand the document but still not believe or act on it.",
+        "facts_from_document": [],
         "recommended_fix": "Add a dedicated section with evidence, risks, reader impact, competitive context, and standards alignment.",
+        "supporting_agents": [],
+        "confidence": "Medium",
+        "agent_consensus": agent_results,
     }
 
     if not _has_api_key():
-        return fallback
+        return _normalize_consensus(fallback, agent_results)
 
     system_prompt = (
         "You are BlindSpot AI's Criticality Ranking Engine, a final judge that resolves disagreements between six "
         "expert diagnostic agents. Your decision must identify the single missing piece with the greatest combined "
         "impact on truth, risk, reader action, competitive strength, and professional review readiness. "
         "Rank severity over novelty. Prefer the gap that, if fixed, most improves the document's chance of succeeding. "
-        "Output one strict JSON object. The JSON object must include exactly these top-level keys: "
-        '"Critical Missing Piece", "criticality_score", "why_it_is_critical", '
-        '"agent_consensus", "recommended_fix".'
+        "Stay grounded in facts visible in the document context. Do not select a generic best-practice gap unless the "
+        "document facts make it directly useful. Output one strict JSON object."
     )
     user_prompt = (
         f"Document context:\n{context}\n\n"
         f"Agent findings:\n{json.dumps(agent_results, ensure_ascii=True, indent=2)}\n\n"
-        "Use this ranking rubric: severity, evidence gap, reader impact, risk exposure, competitive weakness, "
-        "standards failure, and recoverability. Choose the single most critical missing piece. Return only valid JSON."
+        f"Use exactly these JSON keys: {', '.join(CONSENSUS_KEYS)}. "
+        "facts_from_document must contain 2-3 short facts from the uploaded document. "
+        "supporting_agents must contain the 2-3 most relevant agents with their scores. "
+        "recommended_fix must be practical and short enough to show directly in the UI. "
+        "Return only valid JSON."
     )
 
     try:
         raw = await _call_llm(system_prompt, user_prompt, expect_json=True)
-        parsed = json.loads(raw)
-        if "Critical Missing Piece" not in parsed:
-            parsed["Critical Missing Piece"] = fallback["Critical Missing Piece"]
-        return parsed
+        parsed = _extract_json_object(raw) or fallback
+        return _normalize_consensus(parsed, agent_results)
     except Exception as exc:
-        fallback["why_it_is_critical"] += f" Ranking engine fallback was used because the LLM call failed: {exc}"
-        return fallback
+        fallback["why_this_matters"] += f" Ranking engine fallback was used because the LLM call failed: {exc}"
+        return _normalize_consensus(fallback, agent_results)
 
 
 async def stream_debate(context: str):
@@ -369,7 +510,7 @@ async def stream_debate(context: str):
         "data": {"message": "Debate initialized.", "provider": _active_provider(), "model": MODEL},
     }
 
-    pending: set[asyncio.Task[dict[str, str]]] = {
+    pending: set[asyncio.Task[dict[str, Any]]] = {
         asyncio.create_task(_run_agent(name, profile, context))
         for name, profile in AGENTS.items()
     }
