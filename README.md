@@ -15,11 +15,27 @@ BlindSpot AI is a local full-stack AI Analyzer that finds the most critical miss
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-$env:OPENAI_API_KEY = "your-api-key"
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-`OPENAI_API_KEY` is optional for UI testing. Without it, the debate and fix endpoints use deterministic local fallback output.
+## AI Provider
+
+The app uses Groq Cloud by default when `GROQ_API_KEY` is present.
+
+```env
+AI_PROVIDER=groq
+GROQ_MODEL=llama-3.1-8b-instant
+GROQ_API_KEY=your-groq-api-key
+```
+
+OpenRouter can be added later:
+
+```env
+OPENROUTER_MODEL=openrouter/free
+OPENROUTER_API_KEY=your-openrouter-api-key
+```
+
+Without an API key, the debate and fix endpoints use deterministic local fallback output.
 
 SQLite data is stored in `blindspot_store.sqlite3` for local vector storage.
 

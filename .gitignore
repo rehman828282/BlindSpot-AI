@@ -5,6 +5,7 @@ __pycache__/
 venv/
 .env
 .env.*
+!.env.example
 blindspot_store.sqlite3
 uploads/
 .pytest_cache/

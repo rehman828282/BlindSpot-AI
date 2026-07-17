@@ -18,14 +18,14 @@ BlindSpot AI is now a full-stack FastAPI repository for analyzing uploaded docum
 1. `GET /` renders `templates/index.html` through `Jinja2Templates`.
 2. `POST /upload` accepts `.pdf`, `.docx`, and `.pptx`, extracts text, chunks it, embeds it, and stores chunks locally.
 3. SQLite stores document chunks and deterministic local embeddings at `blindspot_store.sqlite3`.
-4. `GET /analyze` streams live SSE events from the six-agent debate:
+4. `GET /analyze` streams live SSE events from the six-agent debate. Each agent has a dedicated mission, review lens, red-flag checklist, scoring rubric, and structured output contract:
    - Skeptic
    - Evidence
    - Risk
    - User Perspective
    - Competitor
    - Standards
-5. The Criticality Ranking Engine emits a strict JSON object with `"Critical Missing Piece"`.
+5. The Criticality Ranking Engine judges severity, evidence gap, reader impact, risk exposure, competitive weakness, standards failure, and recoverability before emitting a strict JSON object with `"Critical Missing Piece"`.
 6. `POST /fix` drafts missing content for the final issue. Any user-provided custom fix instruction is passed through as literal text without paraphrasing.
 
 ## Frontend Flow
@@ -54,4 +54,4 @@ BlindSpot AI is now a full-stack FastAPI repository for analyzing uploaded docum
 
 ## Notes
 
-The app can run without `OPENAI_API_KEY` for local UI testing. In that mode, debate and fix generation use deterministic fallback output. With `OPENAI_API_KEY` set, the OpenAI Python SDK uses `gpt-5.6-sol` by default, or `OPENAI_MODEL` if provided.
+The app uses Groq Cloud as the primary free LLM provider when `GROQ_API_KEY` is present, with `llama-3.1-8b-instant` as the default Groq model. OpenRouter can be added later with `OPENROUTER_API_KEY` and `OPENROUTER_MODEL`. If no provider key is available, debate and fix generation use deterministic fallback output.
